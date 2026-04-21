@@ -1203,8 +1203,36 @@ async function generate() {
       throw new Error(msg)
     }
 
-    const data = await res.json()
-    let code = data.content[0].text
+    let code = ''
+    const ct = res.headers.get('content-type') || ''
+    if (ct.includes('event-stream')) {
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() || ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const payload = line.slice(6).trim()
+          if (!payload) continue
+          try {
+            const evt = JSON.parse(payload)
+            if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta') {
+              code += evt.delta.text
+            } else if (evt.type === 'error') {
+              throw new Error(evt.error?.message || 'stream error')
+            }
+          } catch (e) { if (e.message) throw e }
+        }
+      }
+    } else {
+      const data = await res.json()
+      code = data.content[0].text
+    }
     const m = code.match(/```(?:html)?\n?([\s\S]*?)```/i)
     if (m) code = m[1].trim()
 
